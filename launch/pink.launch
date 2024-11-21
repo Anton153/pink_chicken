@@ -1,0 +1,3 @@
+<launch>
+  <node name="move_robbie" pkg="pink_chicken" type="move_robbie.py" output="screen"/>
+</launch>
