@@ -28,18 +28,17 @@ def clock_callback(data):
     latest_time = data.clock
     # print(latest_time)
 
-def camera_callback(data, cmd_vel_pub):
+def camera_callback(data):
     '''
     Callback function for camera
     '''
+    print("ESTABLISH CAMERA CALLBACK")
+    cmd_vel_pub = rospy.Publisher('/B1/cmd_vel', Twist, queue_size = 10)
     bridge = CvBridge()
     try: 
         image = bridge.imgmsg_to_cv2(data, 'bgr8')
     except CvBridgeError as e:
         print(e)
-
-    cv.imshow('image', image)
-    cv.waitKey(1)
     
     # print('####### Image received #######')
     #find command velocity
@@ -112,13 +111,13 @@ def camera_callback(data, cmd_vel_pub):
     '''
     Function that determines velocity based on image
     '''
-    # height, width = image.shape[:2]
-    # cx = width // 2  # Default to the center if no contours are found
-    # margin = int(0.0 * width)  # Calculate 15% of the width
-    # cropped_image = image[height // 2:, margin:width - margin]
-    # gray = cv.cvtColor(cropped_image, cv.COLOR_BGR2GRAY)
-    # blurred = cv.GaussianBlur(gray, (9, 9), 0)
-    # # median = cv.medianBlur(gray, 5)  # 5 is the kernel size
+    height, width = image.shape[:2]
+    cx = width // 2  # Default to the center if no contours are found
+    margin = int(0.0 * width)  # Calculate 15% of the width
+    cropped_image = image[height // 2:, margin:width - margin]
+    gray = cv.cvtColor(cropped_image, cv.COLOR_BGR2GRAY)
+    blurred = cv.GaussianBlur(gray, (9, 9), 0)
+    # median = cv.medianBlur(gray, 5)  # 5 is the kernel size
 
     # # Threshold for the dark road color
     # lower_bound = 79  
@@ -169,7 +168,7 @@ def camera_callback(data, cmd_vel_pub):
     '''
     Finds signs in the image, which all have blue borders
     '''
-    # global processed_contours
+    global processed_contours
 
     # # Convert image to HSV and identify blue regions
     # hsv = cv.cvtColor(image, cv.COLOR_BGR2HSV)
@@ -233,10 +232,9 @@ def move_robbie():
 
     # Publishers
     score_pub = rospy.Publisher('/score_tracker', String, queue_size=1)
-    cmd_vel_pub = rospy.Publisher('/B1/cmd_vel', Twist, queue_size = 10)
     # Subscribers
     rospy.Subscriber('/clock', Clock, clock_callback)
-    rospy.Subscriber('rrbot/camera1/image_raw', Image, camera_callback, callback_args=cmd_vel_pub)
+    rospy.Subscriber('rrbot/camera1/image_raw', Image, camera_callback)
 
     rospy.loginfo("Move robbie has started")
     rospy.sleep(1.0) #sleep for 1 second before doing stuff
@@ -247,12 +245,12 @@ def move_robbie():
     print("publishing start timer")
     score_pub.publish('ElGato,kebab,0,NAAA')  # Adjust team name and password
     rospy.sleep(2)
-
+    print("setting rate")
     rate = rospy.Rate(10)  # 10Hz loop
 
     while not rospy.is_shutdown():
         # Check if the timer exceeds the threshold
-        if latest_time and latest_time.to_sec() > 10:  # Adjust threshold if necessary
+        if latest_time and latest_time.to_sec() > 10000:  # Adjust threshold if necessary
             end_timer = String()
             end_timer.data = 'ElGato,kebab,-1,NA'
             rospy.loginfo("Stopping the timer: Time exceeded 10 seconds")
