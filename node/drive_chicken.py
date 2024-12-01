@@ -11,12 +11,22 @@ from cv_bridge import CvBridge, CvBridgeError
 import numpy as np
 from std_msgs.msg import String
 import sys
+import tensorflow as tf
 
 class drive_robbie:
 
     def __init__(self):
         #init ros node
         rospy.init_node('move_robbie', anonymous=True)
+
+        #load model
+        try:
+            model_path = "/home/fizzer/ENPH353_Competition/src/pink_chicken/driving_models/best_model.h5"
+            self.model = tf.keras.models.load_model(model_path)
+            rospy.loginfo("Model loaded successfully.")
+        except Exception as e:
+            rospy.logerr(f"Error loading model: {e}")
+            sys.exit(1)
 
         #init cv bridge 
         self.bridge = CvBridge()
@@ -30,15 +40,31 @@ class drive_robbie:
         self.cmd_vel_pub = rospy.Publisher('/B1/cmd_vel', Twist, queue_size = 10)
 
     def image_processing_callback(self,data):
+        print("Image processing callback")
         try:
             cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            print("Image received")
         except CvBridgeError as e:
             print(e)
         cv.imshow("Image window", cv_image)
         cv.waitKey(3)
 
-        #drive. Called in image callback to drive based on image processing
-        #self.drive()
+        #drive with model
+        input_image = cv.resize(cv_image, (112, 112))
+        input_image = np.expand_dims(input_image, axis=0) #add batch dimension
+
+        #predict 
+        print("predicing velocities")
+        predicted_velocities = self.model.predict(input_image)
+        print(predicted_velocities)
+        linear_velocity, angular_velocity = predicted_velocities[0]
+
+        #publish 
+        twist = Twist()
+        twist.linear.x = linear_velocity
+        twist.angular.z = angular_velocity
+        print("publishing....")
+        self.cmd_vel_pub.publish(twist)
     
     def clock_callback(self,data):
         '''
