@@ -32,13 +32,16 @@ def camera_callback(data):
     '''
     Callback function for camera
     '''
-    print("ESTABLISH CAMERA CALLBACK")
+    # print("ESTABLISH CAMERA CALLBACK")
     cmd_vel_pub = rospy.Publisher('/B1/cmd_vel', Twist, queue_size = 10)
     bridge = CvBridge()
     try: 
         image = bridge.imgmsg_to_cv2(data, 'bgr8')
     except CvBridgeError as e:
         print(e)
+
+    cv.imshow('image', image) #check that it works
+    cv.waitKey(1)
     
     # print('####### Image received #######')
     #find command velocity
@@ -111,12 +114,12 @@ def camera_callback(data):
     '''
     Function that determines velocity based on image
     '''
-    height, width = image.shape[:2]
-    cx = width // 2  # Default to the center if no contours are found
-    margin = int(0.0 * width)  # Calculate 15% of the width
-    cropped_image = image[height // 2:, margin:width - margin]
-    gray = cv.cvtColor(cropped_image, cv.COLOR_BGR2GRAY)
-    blurred = cv.GaussianBlur(gray, (9, 9), 0)
+    # height, width = image.shape[:2]
+    # cx = width // 2  # Default to the center if no contours are found
+    # margin = int(0.0 * width)  # Calculate 15% of the width
+    # cropped_image = image[height // 2:, margin:width - margin]
+    # gray = cv.cvtColor(cropped_image, cv.COLOR_BGR2GRAY)
+    # blurred = cv.GaussianBlur(gray, (9, 9), 0)
     # median = cv.medianBlur(gray, 5)  # 5 is the kernel size
 
     # # Threshold for the dark road color
@@ -247,6 +250,8 @@ def move_robbie():
     rospy.sleep(2)
     print("setting rate")
     rate = rospy.Rate(10)  # 10Hz loop
+
+
 
     while not rospy.is_shutdown():
         # Check if the timer exceeds the threshold
