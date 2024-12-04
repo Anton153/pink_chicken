@@ -144,7 +144,7 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 best_loss = float('inf')  # Initialize best loss to a very large value
-scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=22, verbose=True)
+scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0   .5, patience=22, verbose=True)
 best_model_path = "pytorchTest_5.pth"
 
 # Training Loop
