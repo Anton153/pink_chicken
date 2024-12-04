@@ -1,61 +1,100 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
+import pandas as pd
 import tensorflow as tf
 import os
+import cv2
 from tensorflow.keras import Model, Input
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, GlobalAveragePooling2D
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, GlobalAveragePooling2D
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.layers import BatchNormalization, Lambda
+from sklearn.utils.class_weight import compute_class_weight
 from datetime import datetime
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+
 #----------------------------------------------------------------------------------------#
-def data_generator(video_filenames, processed_data_dir, batch_size=32):
-    """
-    Generator for training/validation data with image-only inputs.
+#                               HELPER FUNCTIONS
+#----------------------------------------------------------------------------------------#
+def one_hot_encode(value):
+    """Encodes -1, 0, 1 into one-hot format."""
+    mapping = {-1: [1, 0, 0], 0: [0, 1, 0], 1: [0, 0, 1]}
+    return mapping[value]
 
-    Args:
-        video_filenames (list): List of video pickle filenames.
-        processed_data_dir (str): Directory containing video pickle files.
-        batch_size (int): Number of samples per batch.
+def one_hot_encode_smoothed(value, num_classes=3, smoothing=0.1):
+    """Encodes -1, 0, 1 into smoothed one-hot format."""
+    if value not in [-1, 0, 1]:
+        raise ValueError(f"Unexpected value for one-hot encoding: {value}")
+    one_hot = np.zeros(num_classes)
+    one_hot[value + 1] = 1  # Adjust index: -1->0, 0->1, 1->2
+    return one_hot * (1 - smoothing) + smoothing / num_classes
 
-    Yields:
-        X_images (np.ndarray): Batch of input frames of shape (batch_size, height, width, channels).
-        y (np.ndarray): Batch of target velocities (linear and angular).
-    """
+def data_generator(video_filenames, processed_data_dir, batch_size=32, smoothing=0.1, linear_class_weight=None, angular_class_weight=None):
     while True:
-        X_images, y = [], []  # Inputs and outputs
-        
-        # Shuffle filenames at the start of each epoch
-        np.random.shuffle(video_filenames)
-
+        X_images, y_linear, y_angular, sw_linear, sw_angular = [], [], [], [], []
         for filename in video_filenames:
             file_path = os.path.join(processed_data_dir, filename)
-
-            # Lazy load the pickle file
             with open(file_path, 'rb') as f:
                 video_data = pickle.load(f)
 
             frames = video_data["frames"]
             commands = video_data["commands"]
 
-            # Iterate over frames and commands
             for i in range(len(frames)):
                 X_images.append(frames[i])  # Add frame to batch
-                y.append(commands[i, 1:3])  # Target velocities: linear and angular
+                linear_command = int(round(commands[i, 1]))
+                angular_command = int(round(commands[i, 2]))
 
-                # When batch is full, yield the data
+                y_linear.append(one_hot_encode_smoothed(linear_command, smoothing=smoothing))
+                y_angular.append(one_hot_encode_smoothed(angular_command, smoothing=smoothing))
+
+                # Add sample weights
+                sw_linear.append(linear_class_weight[linear_command + 1])
+                sw_angular.append(angular_class_weight[angular_command + 1])
+
                 if len(X_images) == batch_size:
-                    yield np.array(X_images), np.array(y)
-                    X_images, y = [], []  # Reset for the next batch
+                    yield (
+                        np.array(X_images),
+                        {'linear_velocity': np.array(y_linear), 'angular_velocity': np.array(y_angular)},
+                        {'linear_velocity': np.array(sw_linear), 'angular_velocity': np.array(sw_angular)}
+                    )
+                    X_images, y_linear, y_angular, sw_linear, sw_angular = [], [], [], [], []
 
-        # Yield any remaining data (last incomplete batch)
         if X_images:
-            yield np.array(X_images), np.array(y)
+            yield (
+                np.array(X_images),
+                {'linear_velocity': np.array(y_linear), 'angular_velocity': np.array(y_angular)},
+                {'linear_velocity': np.array(sw_linear), 'angular_velocity': np.array(sw_angular)}
+            )
 
+
+def calculate_class_weights(processed_data_dir, video_filenames):
+    """Calculates class weights based on the training data."""
+    linear_classes = []
+    angular_classes = []
+
+    for filename in video_filenames:
+        file_path = os.path.join(processed_data_dir, filename)
+        with open(file_path, 'rb') as f:
+            video_data = pickle.load(f)
+
+        commands = video_data["commands"]
+        if isinstance(commands, pd.DataFrame):
+            commands = commands.to_numpy()
+
+        linear_classes += [int(round(c[1])) + 1 for c in commands]
+        angular_classes += [int(round(c[2])) + 1 for c in commands]
+
+    linear_weights = compute_class_weight('balanced', classes=np.arange(3), y=linear_classes)
+    angular_weights = compute_class_weight('balanced', classes=np.arange(3), y=angular_classes)
+
+    return linear_weights, angular_weights
 
 def calculate_steps(video_filenames, processed_data_dir, batch_size):
+    """Calculates steps per epoch based on the number of frames."""
     total_frames = 0
     for filename in video_filenames:
         file_path = os.path.join(processed_data_dir, filename)
@@ -65,126 +104,155 @@ def calculate_steps(video_filenames, processed_data_dir, batch_size):
 
     return total_frames // batch_size
 
-def weighted_mse(y_true, y_pred):
-    linear_weight = 0.5  # Smaller weight for linear velocity
-    angular_weight = 1.5  # Larger weight for angular velocity
-
-    # Compute squared errors
-    linear_error = tf.square(y_true[:, 0] - y_pred[:, 0])  # Linear velocity
-    angular_error = tf.square(y_true[:, 1] - y_pred[:, 1])  # Angular velocity
-
-    # Weighted sum
-    return tf.reduce_mean(linear_weight * linear_error + angular_weight * angular_error)
-
-def custom_huber_loss(y_true, y_pred, delta=1.0):
-    linear_weight = 0.5
-    angular_weight = 1.5
-
-    # Errors
-    linear_error = y_true[:, 0] - y_pred[:, 0]
-    angular_error = y_true[:, 1] - y_pred[:, 1]
-
-    # Huber Loss
-    linear_huber = tf.where(tf.abs(linear_error) <= delta,
-                            0.5 * tf.square(linear_error),
-                            delta * tf.abs(linear_error) - 0.5 * tf.square(delta))
-    angular_huber = tf.where(tf.abs(angular_error) <= delta,
-                             0.5 * tf.square(angular_error),
-                             delta * tf.abs(angular_error) - 0.5 * tf.square(delta))
-
-    # Weighted sum
-    return tf.reduce_mean(linear_weight * linear_huber + angular_weight * angular_huber)
+def calibrated_softmax(logits, bias=1.5):
+    """Applies calibrated softmax to logits."""
+    boosted_logits = tf.concat([
+        logits[:, 0:1] * bias,  # Boost "turn left"
+        logits[:, 1:2],        # Keep "go straight" as is
+        logits[:, 2:3] * bias  # Boost "turn right"
+    ], axis=1)
+    return tf.nn.softmax(boosted_logits)
 
 
-# Define directories
+#----------------------------------------------------------------------------------------#
+#                               MODEL SETUP
+#----------------------------------------------------------------------------------------#
+
+# Paths and file setup
 processed_data_dir = '/home/fizzer/ENPH353_Competition/src/pink_chicken/pipeline_testing'
-
-# Split video filenames into training and validation sets
 video_filenames = [f for f in os.listdir(processed_data_dir) if f.endswith('.pkl')]
 np.random.shuffle(video_filenames)
 
-split_ratio = 0.8  # 80% for training, 20% for validation
+split_ratio = 0.90
 split_index = int(len(video_filenames) * split_ratio)
-
 train_filenames = video_filenames[:split_index]
 val_filenames = video_filenames[split_index:]
 
-print(f"Training videos: {len(train_filenames)}, Validation videos: {len(val_filenames)}")
-
-# Calculate steps per epoch
 train_steps = calculate_steps(train_filenames, processed_data_dir, batch_size=32)
 val_steps = calculate_steps(val_filenames, processed_data_dir, batch_size=32)
 
-# Create generators
-train_generator = data_generator(train_filenames, processed_data_dir, batch_size=32)
-val_generator = data_generator(val_filenames, processed_data_dir, batch_size=32)
 
-# Define paths
-model_save_path = f'/home/fizzer/ENPH353_Competition/src/pink_chicken/driving_models/model_{timestamp}.h5'
+# Calculate class weights
+linear_weights, angular_weights = calculate_class_weights(processed_data_dir, train_filenames)
+
+linear_class_weight = {0: linear_weights[0], 1: linear_weights[1], 2: linear_weights[2]}
+angular_class_weight = {0: angular_weights[0], 1: angular_weights[1], 2: angular_weights[2]}
+
+print("Linear Class Weights:", linear_class_weight)
+print("Angular Class Weights:", angular_class_weight)
+
+
+#data generators
+train_generator = data_generator(
+    train_filenames,
+    processed_data_dir,
+    batch_size=32,
+    linear_class_weight=linear_class_weight,
+    angular_class_weight=angular_class_weight
+)
+
+val_generator = data_generator(
+    val_filenames,
+    processed_data_dir,
+    batch_size=32,
+    linear_class_weight=linear_class_weight,
+    angular_class_weight=angular_class_weight
+)
+
+
+# Class weights
+linear_weights, angular_weights = calculate_class_weights(processed_data_dir, train_filenames)
+linear_class_weight = {0: linear_weights[0], 1: linear_weights[1], 2: linear_weights[2]}
+angular_class_weight = {0: angular_weights[0], 1: angular_weights[1], 2: angular_weights[2]}
+
+# Model architecture
 
 inputs = Input(shape=(128, 128, 3), name='image_input')
+# x = Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
+# x = BatchNormalization()(x)
+# x = MaxPooling2D((2, 2))(x)
+# x = Dropout(0.2)(x)
 
-# Convolutional layers with reduced filter sizes
-x = Conv2D(8, (3, 3), activation='relu')(inputs)  # Fewer filters
-x = MaxPooling2D((2, 2))(x)
-x = Conv2D(16, (3, 3), activation='relu')(x)  # Fewer filters
-x = MaxPooling2D((2, 2))(x)
-x = Conv2D(32, (3, 3), activation='relu')(x)  # Fewer filters
-x = MaxPooling2D((2, 2))(x)
+# x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+# x = BatchNormalization()(x)
+# x = MaxPooling2D((2, 2))(x)
+# x = Dropout(0.3)(x)
 
-# Replace Flatten with Global Average Pooling
+# x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+# x = BatchNormalization()(x)
+# x = MaxPooling2D((2, 2))(x)
+# x = Dropout(0.4)(x)
+
+# x = GlobalAveragePooling2D()(x)
+# x = Dense(256, activation='relu')(x)
+# x = Dropout(0.4)(x)
+
+x = Conv2D(16, (3, 3), activation='relu', padding='same')(inputs)
+x = BatchNormalization()(x)
+x = MaxPooling2D((2, 2))(x)
+x = Dropout(0.2)(x)
+
+x = Conv2D(32, (3, 3), activation='relu', padding='same')(x)
+x = BatchNormalization()(x)
+x = MaxPooling2D((2, 2))(x)
+x = Dropout(0.2)(x)
+
+x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+x = BatchNormalization()(x)
+x = MaxPooling2D((2, 2))(x)
+x = Dropout(0.3)(x)
+
 x = GlobalAveragePooling2D()(x)
+x = Dense(256, activation='relu')(x)
+x = Dropout(0.3)(x)
 
-# Smaller fully connected layers
-linear_output = Dense(1, activation='linear', name='linear_velocity')(x)
-angular_output = Dense(1, activation='linear', name='angular_velocity')(x)
 
-# Define the model
+# Outputs
+linear_logits = Dense(3, activation=None, name='linear_velocity_logits')(x)
+angular_logits = Dense(3, activation=None, name='angular_velocity_logits')(x)
+
+linear_output = Lambda(lambda logits: calibrated_softmax(logits), name='linear_velocity')(linear_logits)
+angular_output = Lambda(lambda logits: calibrated_softmax(logits), name='angular_velocity')(angular_logits)
+
 model = Model(inputs=inputs, outputs=[linear_output, angular_output])
 
-# Model summary
+# Compile model
+model.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss={
+        'linear_velocity': 'categorical_crossentropy',
+        'angular_velocity': 'categorical_crossentropy'
+    },
+    metrics={
+        'linear_velocity': 'accuracy',
+        'angular_velocity': 'accuracy'
+    }
+)
 model.summary()
 
-# Compile the model
-# For Weighted MSE
-model.compile(
-    optimizer='adam',
-    loss={'linear_velocity': 'mse', 'angular_velocity': 'mse'},
-    loss_weights={'linear_velocity': 1.0, 'angular_velocity': 1.5},
-    metrics={'linear_velocity': 'mae', 'angular_velocity': 'mae'}
-)
+# Callbacks
+checkpoint = ModelCheckpoint(filepath=f'/home/fizzer/ENPH353_Competition/src/pink_chicken/driving_models/model_{timestamp}.h5', save_best_only=True, monitor='val_loss', mode='min', verbose=1)
+early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
 
-
-checkpoint = ModelCheckpoint(
-    filepath=model_save_path,
-    save_best_only=True,
-    monitor='val_loss',
-    mode='min',
-    verbose=1
-)
-
-early_stopping = EarlyStopping(
-    monitor='val_loss',
-    patience=25,
-    restore_best_weights=True,
-    verbose=1
-)
-
+# Train model
 history = model.fit(
     train_generator,
     steps_per_epoch=train_steps,
     validation_data=val_generator,
     validation_steps=val_steps,
-    epochs=90,
+    epochs=200,
     verbose=1,
     callbacks=[checkpoint, early_stopping]
 )
 
-# Visualize training progress
-plt.plot(history.history['loss'], label='Training Loss')
-plt.plot(history.history['val_loss'], label='Validation Loss')
+
+# Plot accuracies
+plt.plot(history.history['linear_velocity_accuracy'], label='Linear Velocity Accuracy')
+plt.plot(history.history['val_linear_velocity_accuracy'], label='Validation Linear Velocity Accuracy')
+plt.plot(history.history['angular_velocity_accuracy'], label='Angular Velocity Accuracy')
+plt.plot(history.history['val_angular_velocity_accuracy'], label='Validation Angular Velocity Accuracy')
 plt.xlabel('Epochs')
-plt.ylabel('Loss')
+plt.ylabel('Accuracy')
 plt.legend()
-plt.title('Training and Validation Loss')
+plt.title('Training and Validation Accuracy')
 plt.show()

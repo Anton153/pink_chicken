@@ -52,7 +52,7 @@ for video_file in video_files:
         commands['timestamp'] = pd.to_numeric(commands['timestamp'], errors='coerce')
         commands['linear_velocity'] = pd.to_numeric(commands['linear_velocity'], errors='coerce')
         commands['angular_velocity'] = pd.to_numeric(commands['angular_velocity'], errors='coerce')
-
+        
         # Open video
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -97,8 +97,22 @@ for video_file in video_files:
         aligned_data['linear_velocity'].fillna(method='ffill', inplace=True)
         aligned_data['angular_velocity'].fillna(method='ffill', inplace=True)
 
+        # Apply discretization logic
+        aligned_data['linear_velocity'] = aligned_data['linear_velocity'].apply(
+            lambda x: 1 if x > 0 else (-1 if x < 0 else 0)
+        )
+
+        aligned_data['angular_velocity'] = aligned_data['angular_velocity'].apply(
+            lambda x: 1 if x > 0 else (-1 if x < 0 else 0)
+        )
+
         # Drop frames only if forward-filling is still not sufficient (e.g., at the start of data)
         aligned_data.dropna(subset=['linear_velocity', 'angular_velocity'], inplace=True)
+
+        # Filter out frames where both velocities are zero
+        aligned_data = aligned_data[
+            ~((aligned_data['linear_velocity'] == 0) & (aligned_data['angular_velocity'] == 0))
+        ]
 
         # Create synchronized data structure
         synchronized_frames = [frames[int(idx)] for idx in aligned_data['frame_index']]
