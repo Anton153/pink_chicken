@@ -40,8 +40,8 @@ def camera_callback(data):
     except CvBridgeError as e:
         print(e)
 
-    cv.imshow('image', image) #check that it works
-    cv.waitKey(1)
+    # cv.imshow('image', image) #check that it works
+    # cv.waitKey(1)
     
     # print('####### Image received #######')
     #find command velocity

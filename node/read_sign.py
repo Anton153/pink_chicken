@@ -3,7 +3,7 @@
 
 from __future__ import print_function
 from os import wait
-
+import os
 import roslib
 import sys
 import rospy
@@ -16,6 +16,7 @@ from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Twist
 from PyQt5 import QtCore, QtGui, QtWidgets
 from python_qt_binding import loadUi
+import tensorflow as tf
 from tensorflow.keras import models
 from tensorflow.keras import optimizers
 from tensorflow.keras.utils import plot_model
@@ -129,10 +130,6 @@ class read_sign(QtWidgets.QMainWindow):
                 # cv2.waitKey(1)
                 cropped = self.process_image(clueboard_transformed)
                 self.cnn(cropped)
-        # Process SIFT keypoint matching
-        good_matches, kp_ref, kp_live, adjusted_kp_live, gray_live_frame = self.perform_sift_matching(blue_roi)
-        if good_matches is None:
-            rospy.logwarn("No valid matches found.")
             return
 
         # Visualize matches
@@ -172,15 +169,14 @@ class read_sign(QtWidgets.QMainWindow):
         blue_clue = cv2.inRange(hsv_clueboard, lower_blue, upper_blue)
         clue_copy = clueboard_transformed.copy()
 
-
+        print("procesing")
         # Define rectangle dimensions
-        rect_width = 49  # Width of each rectangle
-        rect_height = 100  # Height of each rectangle
+        rect_width = (49 * 2)# Width of each rectangle
+        rect_height = (100  * 2)# Height of each rectangle
 
         # Define the starting position for the first character (x, y)
-        top_start = (265, 40)  # Starting point
-        bot_start = (30,310)
-       
+        top_start = (265*2, 40*2)  # Starting point
+        bot_start = (30*2,310*2)
         rectangles = []
 
 
@@ -208,12 +204,37 @@ class read_sign(QtWidgets.QMainWindow):
             x2, y2 = bottom_right
 
             cropped = blue_clue[y1:y2, x1:x2]
-            if cv2.countNonZero(cropped) >=200:
+            
+            kernel = np.ones((3, 3), np.uint8)
+
+            cropped = cv2.dilate(cropped, kernel, iterations=1)
+            if cv2.countNonZero(cropped) >=600 and cropped.mean() < 100 :
                 cropped = self.padding(cropped, target_size=(100, 150))
                 cropped_images.append(cropped)
+                
+                
         for i, cropped in enumerate(cropped_images):
-            cv2.imshow(f"Cropped {i+1}", cropped)
-            cv2.waitKey(1)
+            # cv2.imshow(f"Cropped {i+1}", cropped)
+            # cv2.waitKey(1)
+            directory = "/home/fizzer/ros_ws/src/pink_chicken/reading_CNN/pictures"
+            os.makedirs(directory, exist_ok=True)  # Ensure directory exists
+            
+            # Check for the highest current file index
+            existing_files = os.listdir(directory)
+            max_index = 0
+            for file_name in existing_files:
+                if file_name.startswith("cropped_") and file_name.endswith(".png"):
+                    try:
+                        num = int(file_name.split("_")[1].split(".")[0])
+                        max_index = max(max_index, num)
+                    except ValueError:
+                        continue
+            
+            # Generate unique file name
+            file_path = os.path.join(directory, f"cropped_{max_index + i + 1}.png")
+
+            # Save the cropped image
+            cv2.imwrite(file_path, cropped)
         return cropped_images
 
 
@@ -230,7 +251,7 @@ class read_sign(QtWidgets.QMainWindow):
 
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > 500:
+            if area > 10000:
                 epsilon = 0.02 * cv2.arcLength(contour, True)
                 approx = cv2.approxPolyDP(contour, epsilon, True)
                 if len(approx) == 4 and area > max_area:
@@ -260,69 +281,132 @@ class read_sign(QtWidgets.QMainWindow):
 
         return None, None, None
 
-    def perform_sift_matching(self, blue_roi):
-        """
-        Detects and matches SIFT keypoints between the reference image and blue ROI.
-        """
-        gray_ref_image = cv2.cvtColor(self.reference_image, cv2.COLOR_BGR2GRAY)
-        gray_live_frame = cv2.cvtColor(blue_roi, cv2.COLOR_BGR2GRAY)
-        # cv2.imshow("blueROI", blue_roi)
+    # def perform_sift_matching(self, blue_roi):
+    #     """
+    #     Detects and matches SIFT keypoints between the reference image and blue ROI.
+    #     """
+    #     gray_ref_image = cv2.cvtColor(self.reference_image, cv2.COLOR_BGR2GRAY)
+    #     gray_live_frame = cv2.cvtColor(blue_roi, cv2.COLOR_BGR2GRAY)
+    #     cv2.imshow("blueROI", blue_roi)
 
-        sift = cv2.SIFT_create()
-        kp_ref, desc_ref = sift.detectAndCompute(gray_ref_image, None)
-        kp_live, desc_live = sift.detectAndCompute(gray_live_frame, None)
+    #     sift = cv2.SIFT_create()
+    #     kp_ref, desc_ref = sift.detectAndCompute(gray_ref_image, None)
+    #     kp_live, desc_live = sift.detectAndCompute(gray_live_frame, None)
 
-        if desc_ref is None or desc_live is None:
-            return None, None, None, None, None
+    #     if desc_ref is None or desc_live is None:
+    #         return None, None, None, None, None
 
-        flann = cv2.FlannBasedMatcher(dict(algorithm=0, trees=5), {})
-        matches = flann.knnMatch(desc_ref, desc_live, k=2)
+    #     flann = cv2.FlannBasedMatcher(dict(algorithm=0, trees=5), {})
+    #     matches = flann.knnMatch(desc_ref, desc_live, k=2)
 
-        good_matches = [m for m, n in matches if m.distance < 0.5 * n.distance]
-        adjusted_kp_live = [cv2.KeyPoint(kp.pt[0], kp.pt[1], kp.size, kp.angle, kp.response, kp.octave, kp.class_id)
-                            for kp in kp_live]
+    #     good_matches = [m for m, n in matches if m.distance < 0.5 * n.distance]
+    #     adjusted_kp_live = [cv2.KeyPoint(kp.pt[0], kp.pt[1], kp.size, kp.angle, kp.response, kp.octave, kp.class_id)
+    #                         for kp in kp_live]
     
-        return good_matches, kp_ref, kp_live, adjusted_kp_live, gray_live_frame
+    #     return good_matches, kp_ref, kp_live, adjusted_kp_live, gray_live_frame
 
-    def straighten_clueboard(self, good_matches, kp_ref, kp_live, blue_corners, blue_corners_adjusted, blue_roi):
-        """
-        Computes the homography to straighten the clueboard.
-        """
+    # def straighten_clueboard(self, good_matches, kp_ref, kp_live, blue_corners, blue_corners_adjusted, blue_roi):
+    #     """
+    #     Computes the homography to straighten the clueboard.
+    #     """
 
-        if len(good_matches) < 10:
-            rospy.logwarn("Not enough good matches to compute Homography.")
-            return
+    #     if len(good_matches) < 10:
+    #         rospy.logwarn("Not enough good matches to compute Homography.")
+    #         return
 
-        ref_pts = np.float32([kp_ref[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        live_pts = np.float32([kp_live[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        matrix, mask = cv2.findHomography(ref_pts, live_pts, cv2.RANSAC, 5.0)
+    #     ref_pts = np.float32([kp_ref[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    #     live_pts = np.float32([kp_live[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    #     matrix, mask = cv2.findHomography(ref_pts, live_pts, cv2.RANSAC, 5.0)
 
-        if matrix is not None:
-            x, y, w, h = cv2.boundingRect(blue_corners)
-            h, w = cv2.cvtColor(self.reference_image, cv2.COLOR_BGR2GRAY).shape
+    #     if matrix is not None:
+    #         x, y, w, h = cv2.boundingRect(blue_corners)
+    #         h, w = cv2.cvtColor(self.reference_image, cv2.COLOR_BGR2GRAY).shape
 
-            ref_corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
-            live_corners = cv2.perspectiveTransform(ref_corners, matrix)
+    #         ref_corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
+    #         live_corners = cv2.perspectiveTransform(ref_corners, matrix)
 
-            # Ensure proper offset and shape
-            offset = np.array([x, y], dtype=np.float32).reshape(1, 2)
-            live_corners_full = live_corners.reshape(4, 2) + offset
+    #         # Ensure proper offset and shape
+    #         offset = np.array([x, y], dtype=np.float32).reshape(1, 2)
+    #         live_corners_full = live_corners.reshape(4, 2) + offset
 
-            # Validate shapes before transformation
-            if live_corners_full.shape != (4, 2) or live_corners_full.dtype != np.float32:
-                rospy.logwarn("live_corners_full is not in the correct format.")
-                return
+    #         # Validate shapes before transformation
+    #         if live_corners_full.shape != (4, 2) or live_corners_full.dtype != np.float32:
+    #             rospy.logwarn("live_corners_full is not in the correct format.")
+    #             return
 
-            # Compute perspective transform
-            straight_matrix = cv2.getPerspectiveTransform(
-                live_corners_full,
-                np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
-            )
-            # clueboard_transformed = cv2.warpPerspective(self.latest_frame, straight_matrix, (640, 480))
+    #         # Compute perspective transform
+    #         straight_matrix = cv2.getPerspectiveTransform(
+    #             live_corners_full,
+    #             np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
+    #         )
+    #         # clueboard_transformed = cv2.warpPerspective(self.latest_frame, straight_matrix, (640, 480))
 
-            # print("TRANSFORMED")
-            # cv2.imshow("Clueboard", clueboard_transformed)
-            # cv2.waitKey(1)
+    #         # print("TRANSFORMED")
+    #         # cv2.imshow("Clueboard", clueboard_transformed)
+    #         # cv2.waitKey(1)
+    # def straighten_from_grey_clueboard(self, blue_roi):
+    #     if blue_roi is None:
+    #         rospy.logwarn("No blue ROI provided.")
+    #         return None
+
+    #     # Convert to grayscale
+    #     gray_roi = cv2.cvtColor(blue_roi, cv2.COLOR_BGR2GRAY)
+
+    #     # Apply Gaussian blur to reduce noise
+    #     blurred = cv2.GaussianBlur(gray_roi, (5, 5), 0)
+
+    #     # Perform Canny edge detection
+    #     edges = cv2.Canny(blurred, threshold1=50, threshold2=150)
+    #     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    #     clueboard_corners = None
+    #     max_area = 0
+
+    #     for contour in contours:
+    #         area = cv2.contourArea(contour)
+    #         if area > 500:  # Adjust this threshold as needed
+    #             epsilon = 0.02 * cv2.arcLength(contour, True)
+    #             approx = cv2.approxPolyDP(contour, epsilon, True)
+    #             if len(approx) == 4 and area > max_area:
+    #                 max_area = area
+    #                 clueboard_corners = approx.reshape(4, 2)
+
+    #     if clueboard_corners is None:
+    #         # rospy.logwarn("No quadrilateral detected for grey clueboard.")
+    #         return None
+
+
+    #     def sort_corners(corners):
+    #         s = corners.sum(axis=1)
+    #         diff = np.diff(corners, axis=1)
+    #         return np.array([
+    #             corners[np.argmin(s)],  # Top-left
+    #             corners[np.argmin(diff)],  # Top-right
+    #             corners[np.argmax(s)],  # Bottom-right
+    #             corners[np.argmax(diff)],  # Bottom-left
+    #         ], dtype=np.float32)
+
+    #     sorted_corners = sort_corners(clueboard_corners)
+
+    #     # Compute dynamic dimensions
+    #     width = int(np.linalg.norm(sorted_corners[1] - sorted_corners[0]))
+    #     height = int(np.linalg.norm(sorted_corners[2] - sorted_corners[1]))
+
+    #     dest_corners = np.array([
+    #         [0, 0],
+    #         [width - 1, 0],
+    #         [width - 1, height - 1],
+    #         [0, height - 1]
+    #     ], dtype=np.float32)
+
+    #     perspective_matrix = cv2.getPerspectiveTransform(sorted_corners, dest_corners)
+    #     clueboard_transformed = cv2.warpPerspective(blue_roi, perspective_matrix, (width, height))
+
+    #     # Debugging: Display results
+    #     cv2.imshow("Detected Edges", edges)
+    #     cv2.imshow("Transformed Clueboard", clueboard_transformed)
+    #     cv2.waitKey(1)
+
+    #     return clueboard_transformed
 
     def straighten_from_grey_clueboard(self, blue_roi):
         """
@@ -332,7 +416,8 @@ class read_sign(QtWidgets.QMainWindow):
         if blue_roi is None:
             rospy.logwarn("No blue ROI provided.")
             return None
-
+        cv2.imshow("ROI", blue_roi)
+        cv2.waitKey(1)
         # Convert blue_roi to grayscale
         gray_roi = cv2.cvtColor(blue_roi, cv2.COLOR_BGR2GRAY)
 
@@ -376,8 +461,8 @@ class read_sign(QtWidgets.QMainWindow):
         sorted_corners = sort_corners(clueboard_corners)
 
         # Define the target corners for the perspective transform (standard rectangle)
-        width = 640  # Desired width
-        height = 480  # Desired height
+        width = 1280# Desired width
+        height = 960 # Desired height
         dest_corners = np.array([
             [0, 0],
             [width - 1, 0],
@@ -393,14 +478,15 @@ class read_sign(QtWidgets.QMainWindow):
 
         # Debugging: Display the detected edges and the transformed clueboard
         # cv2.imshow("Detected Edges", edges)
-        # cv2.imshow("Transformed Clueboard", clueboard_transformed)
-        # cv2.waitKey(1)
+        cv2.imshow("Transformed Clueboard", clueboard_transformed)
+        cv2.waitKey(1)
 
         return clueboard_transformed
 
 
     def cnn(self,cropped_images):
-        model = load_model("/home/fizzer/ros_ws/src/pink_chicken/node/trained_cnn_model_v2.h5")
+        
+        model = load_model("/home/fizzer/ros_ws/src/pink_chicken/reading_CNN/modelv6.h5", compile=False, custom_objects={'InputLayer': tf.keras.layers.Input})
 
         characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
