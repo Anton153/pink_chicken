@@ -8,5 +8,6 @@
   <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model"
         args="$(arg init_pose) -unpause -urdf -model $(arg robot_name) -param robot_description" respawn="false" output="screen" />
     
-  <node name="move_robbie" pkg="pink_chicken" type="move_robbie.py" output="screen"/>
+  <node name="drive_chicken" pkg="pink_chicken" type="drive_chicken.py" output="screen"/>
+  <!-- <node name="read_sign" pkg="pink_chicken" type="read_sign.py" output="screen"/> -->
 </launch>

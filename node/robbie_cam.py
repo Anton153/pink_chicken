@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from __future__ import print_function
 
 import roslib
@@ -12,7 +14,10 @@ from geometry_msgs.msg import Twist
 class image_converter:
 
     def __init__(self):
+        rospy.init_node('move_robbie', anonymous = True )
+
         self.bridge = CvBridge()
+        
         self.image_sub = rospy.Subscriber("rrbot/camera1/image_raw", Image, self.callback)
     
     def callback(self,data):
@@ -25,7 +30,6 @@ class image_converter:
 
 def main(args):
     ic = image_converter()
-    rospy.init_node('image_converter', anonymous=True)
     try:
         rospy.spin()
     except KeyboardInterrupt:
