@@ -35,6 +35,8 @@ class read_sign(QtWidgets.QMainWindow):
 
         # Initialize ROS node
         rospy.init_node('read_sign', anonymous=True)
+        
+        self.score_pub = rospy.Publisher('/score_tracker', String, queue_size=1)
 
         # loadUi("/home/fizzer/ros_ws/src/pink_chicken/node/SIFT_robot.ui", self)
 
@@ -129,7 +131,9 @@ class read_sign(QtWidgets.QMainWindow):
                 # cv2.imshow("Final Clueboard", clueboard_transformed)
                 # cv2.waitKey(1)
                 cropped = self.process_image(clueboard_transformed)
-                self.cnn(cropped)
+                string = self.cnn(cropped)
+                self.publish(string)
+                
             return
 
         # Visualize matches
@@ -251,7 +255,7 @@ class read_sign(QtWidgets.QMainWindow):
 
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > 10000:
+            if area > 1000:
                 epsilon = 0.02 * cv2.arcLength(contour, True)
                 approx = cv2.approxPolyDP(contour, epsilon, True)
                 if len(approx) == 4 and area > max_area:
@@ -281,132 +285,6 @@ class read_sign(QtWidgets.QMainWindow):
 
         return None, None, None
 
-    # def perform_sift_matching(self, blue_roi):
-    #     """
-    #     Detects and matches SIFT keypoints between the reference image and blue ROI.
-    #     """
-    #     gray_ref_image = cv2.cvtColor(self.reference_image, cv2.COLOR_BGR2GRAY)
-    #     gray_live_frame = cv2.cvtColor(blue_roi, cv2.COLOR_BGR2GRAY)
-    #     cv2.imshow("blueROI", blue_roi)
-
-    #     sift = cv2.SIFT_create()
-    #     kp_ref, desc_ref = sift.detectAndCompute(gray_ref_image, None)
-    #     kp_live, desc_live = sift.detectAndCompute(gray_live_frame, None)
-
-    #     if desc_ref is None or desc_live is None:
-    #         return None, None, None, None, None
-
-    #     flann = cv2.FlannBasedMatcher(dict(algorithm=0, trees=5), {})
-    #     matches = flann.knnMatch(desc_ref, desc_live, k=2)
-
-    #     good_matches = [m for m, n in matches if m.distance < 0.5 * n.distance]
-    #     adjusted_kp_live = [cv2.KeyPoint(kp.pt[0], kp.pt[1], kp.size, kp.angle, kp.response, kp.octave, kp.class_id)
-    #                         for kp in kp_live]
-    
-    #     return good_matches, kp_ref, kp_live, adjusted_kp_live, gray_live_frame
-
-    # def straighten_clueboard(self, good_matches, kp_ref, kp_live, blue_corners, blue_corners_adjusted, blue_roi):
-    #     """
-    #     Computes the homography to straighten the clueboard.
-    #     """
-
-    #     if len(good_matches) < 10:
-    #         rospy.logwarn("Not enough good matches to compute Homography.")
-    #         return
-
-    #     ref_pts = np.float32([kp_ref[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-    #     live_pts = np.float32([kp_live[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-    #     matrix, mask = cv2.findHomography(ref_pts, live_pts, cv2.RANSAC, 5.0)
-
-    #     if matrix is not None:
-    #         x, y, w, h = cv2.boundingRect(blue_corners)
-    #         h, w = cv2.cvtColor(self.reference_image, cv2.COLOR_BGR2GRAY).shape
-
-    #         ref_corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
-    #         live_corners = cv2.perspectiveTransform(ref_corners, matrix)
-
-    #         # Ensure proper offset and shape
-    #         offset = np.array([x, y], dtype=np.float32).reshape(1, 2)
-    #         live_corners_full = live_corners.reshape(4, 2) + offset
-
-    #         # Validate shapes before transformation
-    #         if live_corners_full.shape != (4, 2) or live_corners_full.dtype != np.float32:
-    #             rospy.logwarn("live_corners_full is not in the correct format.")
-    #             return
-
-    #         # Compute perspective transform
-    #         straight_matrix = cv2.getPerspectiveTransform(
-    #             live_corners_full,
-    #             np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
-    #         )
-    #         # clueboard_transformed = cv2.warpPerspective(self.latest_frame, straight_matrix, (640, 480))
-
-    #         # print("TRANSFORMED")
-    #         # cv2.imshow("Clueboard", clueboard_transformed)
-    #         # cv2.waitKey(1)
-    # def straighten_from_grey_clueboard(self, blue_roi):
-    #     if blue_roi is None:
-    #         rospy.logwarn("No blue ROI provided.")
-    #         return None
-
-    #     # Convert to grayscale
-    #     gray_roi = cv2.cvtColor(blue_roi, cv2.COLOR_BGR2GRAY)
-
-    #     # Apply Gaussian blur to reduce noise
-    #     blurred = cv2.GaussianBlur(gray_roi, (5, 5), 0)
-
-    #     # Perform Canny edge detection
-    #     edges = cv2.Canny(blurred, threshold1=50, threshold2=150)
-    #     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    #     clueboard_corners = None
-    #     max_area = 0
-
-    #     for contour in contours:
-    #         area = cv2.contourArea(contour)
-    #         if area > 500:  # Adjust this threshold as needed
-    #             epsilon = 0.02 * cv2.arcLength(contour, True)
-    #             approx = cv2.approxPolyDP(contour, epsilon, True)
-    #             if len(approx) == 4 and area > max_area:
-    #                 max_area = area
-    #                 clueboard_corners = approx.reshape(4, 2)
-
-    #     if clueboard_corners is None:
-    #         # rospy.logwarn("No quadrilateral detected for grey clueboard.")
-    #         return None
-
-
-    #     def sort_corners(corners):
-    #         s = corners.sum(axis=1)
-    #         diff = np.diff(corners, axis=1)
-    #         return np.array([
-    #             corners[np.argmin(s)],  # Top-left
-    #             corners[np.argmin(diff)],  # Top-right
-    #             corners[np.argmax(s)],  # Bottom-right
-    #             corners[np.argmax(diff)],  # Bottom-left
-    #         ], dtype=np.float32)
-
-    #     sorted_corners = sort_corners(clueboard_corners)
-
-    #     # Compute dynamic dimensions
-    #     width = int(np.linalg.norm(sorted_corners[1] - sorted_corners[0]))
-    #     height = int(np.linalg.norm(sorted_corners[2] - sorted_corners[1]))
-
-    #     dest_corners = np.array([
-    #         [0, 0],
-    #         [width - 1, 0],
-    #         [width - 1, height - 1],
-    #         [0, height - 1]
-    #     ], dtype=np.float32)
-
-    #     perspective_matrix = cv2.getPerspectiveTransform(sorted_corners, dest_corners)
-    #     clueboard_transformed = cv2.warpPerspective(blue_roi, perspective_matrix, (width, height))
-
-    #     # Debugging: Display results
-    #     cv2.imshow("Detected Edges", edges)
-    #     cv2.imshow("Transformed Clueboard", clueboard_transformed)
-    #     cv2.waitKey(1)
-
-    #     return clueboard_transformed
 
     def straighten_from_grey_clueboard(self, blue_roi):
         """
@@ -486,10 +364,10 @@ class read_sign(QtWidgets.QMainWindow):
 
     def cnn(self,cropped_images):
         
-        model = load_model("/home/fizzer/ros_ws/src/pink_chicken/reading_CNN/modelv6.h5", compile=False, custom_objects={'InputLayer': tf.keras.layers.Input})
+        model = load_model("/home/fizzer/ros_ws/src/pink_chicken/reading_CNN/modelv7.h5", compile=False, custom_objects={'InputLayer': tf.keras.layers.Input})
 
         characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-
+        print("cnn")
         preprocessed_images = []
         for img in cropped_images:
             # Normalize pixel values to [0, 1]
@@ -506,16 +384,53 @@ class read_sign(QtWidgets.QMainWindow):
         predictions = model.predict(images)
         predicted_classes = np.argmax(predictions, axis=1)
         read_char = [characters[idx] for idx in predicted_classes]
-        print("Recognized Characters:", " ".join(read_char))
+        
+        string = "".join(read_char)
+        print("Recognized Characters:", string)
         # model.summary()
-        return read_char
-
+        return string
+    
+    def publish(self,string):
+        
+        if 'SIZE' in string:
+            modified_string = string.replace('SIZE', '').strip()
+            message = f'ElGato,kebab,0,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'VICTIM' in string:
+            modified_string = string.replace('VICTIM', '').strip()
+            message = f'ElGato,kebab,1,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'CRIME' in string:
+            modified_string = string.replace('CRIME', '').strip()
+            message = f'ElGato,kebab,2,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'TIME' in string:
+            modified_string = string.replace('TIME', '').strip()
+            message = f'ElGato,kebab,3,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'PLACE' in string:
+            modified_string = string.replace('PLACE', '').strip()
+            message = f'ElGato,kebab,4,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'MOTIVE' in string:
+            modified_string = string.replace('MOTIVE', '').strip()
+            message = f'ElGato,kebab,5,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'WEAPON' in string:
+            modified_string = string.replace('WEAPON', '').strip()
+            message = f'ElGato,kebab,6,"{modified_string}"'
+            self.score_pub.publish(message)
+        elif 'BANDIT' in string:
+            modified_string = string.replace('BANDIT', '').strip()
+            message = f'ElGato,kebab,7,"{modified_string}"'
+            self.score_pub.publish(message)
+            
+    
 def main(args):
     """
     Main entry point for the application.
     """
     # Initialize the Qt application
-
     app = QtWidgets.QApplication(args)
 
     # Create an instance of the read_sign class

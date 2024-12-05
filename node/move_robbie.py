@@ -242,11 +242,9 @@ def move_robbie():
     rospy.loginfo("Move robbie has started")
     rospy.sleep(1.0) #sleep for 1 second before doing stuff
 
-    # Start the timer
-    start_timer = String()
-    # Start the timer
+
     print("publishing start timer")
-    score_pub.publish('ElGato,kebab,0,NAAA')  # Adjust team name and password
+    score_pub.publish('ElGato,kebab,0,START')  # Adjust team name and password
     rospy.sleep(2)
     print("setting rate")
     rate = rospy.Rate(10)  # 10Hz loop
